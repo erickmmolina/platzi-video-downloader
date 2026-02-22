@@ -430,22 +430,66 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
     });
   }
 
-  // Crear Blob, objectURL y descargar TODO desde el offscreen document
-  // (los blob URLs solo son válidos en el contexto que los creó)
+  // Pedir al offscreen que cree el Blob final y devuelva el objectURL
+  const finalizeResult = await chrome.runtime.sendMessage({
+    action: 'offscreen:finalize',
+    downloadId,
+  });
+
+  if (!finalizeResult?.ok) {
+    // Limpiar en caso de error
+    await chrome.runtime.sendMessage({ action: 'offscreen:cleanup', downloadId }).catch(() => {});
+    throw new Error(finalizeResult?.error || 'Error creando Blob de video');
+  }
+
+  // Descargar el archivo usando chrome.downloads (disponible en el service worker)
   const safeTitle = sanitizeFilename(classItem.title);
   const number = String(classItem.number).padStart(2, '0');
   const courseFolder = sanitizeFilename(downloadState.courseTitle || downloadState.courseSlug);
   const filename = `Platzi/${courseFolder}/${number}-${safeTitle}.ts`;
 
-  const downloadResult = await chrome.runtime.sendMessage({
-    action: 'offscreen:download',
-    downloadId,
-    filename,
-  });
-
-  if (!downloadResult?.ok) {
-    throw new Error(downloadResult?.error || 'Error descargando archivo de video');
+  try {
+    await downloadWithChromeAPI(finalizeResult.objectUrl, filename);
+  } finally {
+    // Siempre limpiar el objectURL al terminar (éxito o error)
+    await chrome.runtime.sendMessage({ action: 'offscreen:cleanup', downloadId }).catch(() => {});
   }
+}
+
+/**
+ * Ejecuta chrome.downloads.download y espera a que complete.
+ * Devuelve una promesa que resuelve cuando la descarga termina.
+ */
+function downloadWithChromeAPI(url, filename) {
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      { url, filename, saveAs: false },
+      (dlId) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        if (!dlId) {
+          reject(new Error('chrome.downloads.download no devolvió ID'));
+          return;
+        }
+
+        const listener = (delta) => {
+          if (delta.id !== dlId) return;
+
+          if (delta.state?.current === 'complete') {
+            chrome.downloads.onChanged.removeListener(listener);
+            resolve();
+          } else if (delta.state?.current === 'interrupted') {
+            chrome.downloads.onChanged.removeListener(listener);
+            reject(new Error(`Descarga interrumpida: ${delta.error?.current || 'desconocido'}`));
+          }
+        };
+        chrome.downloads.onChanged.addListener(listener);
+      }
+    );
+  });
 }
 
 function sanitizeFilename(name) {

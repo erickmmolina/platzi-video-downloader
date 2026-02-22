@@ -1,7 +1,7 @@
-// Offscreen document - Maneja Blobs y descargas para evitar OOM en el service worker
-// El service worker no tiene acceso a URL.createObjectURL, y los blob URLs
-// creados aquí no son accesibles desde otros contextos, así que este documento
-// también ejecuta la descarga final.
+// Offscreen document - Maneja Blobs para evitar OOM en el service worker
+// El service worker no tiene acceso a URL.createObjectURL ni Blob API,
+// así que este documento acumula segmentos como Blob parts y crea el objectURL.
+// La descarga final la ejecuta el service worker via chrome.downloads.
 
 const pendingDownloads = new Map();
 
@@ -14,6 +14,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pendingDownloads.set(downloadId, {
         parts: [],
         mimeType: mimeType || 'video/mp2t',
+        objectUrl: null,
       });
       sendResponse({ ok: true });
       return true;
@@ -40,60 +41,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    case 'offscreen:download': {
-      // Crear Blob final, objectURL, ejecutar descarga y limpiar
-      const { downloadId, filename } = message;
+    case 'offscreen:finalize': {
+      // Crear Blob final y objectURL, enviarlo al service worker
+      // El service worker usará chrome.downloads.download() con este URL
+      const { downloadId } = message;
       const entry = pendingDownloads.get(downloadId);
       if (!entry) {
         sendResponse({ error: 'downloadId no encontrado' });
         return true;
       }
 
-      // Crear Blob y objectURL
-      const blob = new Blob(entry.parts, { type: entry.mimeType });
-      const objectUrl = URL.createObjectURL(blob);
-      const fileSize = blob.size;
+      try {
+        const blob = new Blob(entry.parts, { type: entry.mimeType });
+        const objectUrl = URL.createObjectURL(blob);
+        const fileSize = blob.size;
 
-      // Limpiar partes para liberar memoria
-      entry.parts = [];
+        // Guardar objectUrl para cleanup posterior
+        entry.objectUrl = objectUrl;
+        // Liberar las partes individuales (el Blob final ya las contiene)
+        entry.parts = [];
 
-      // Ejecutar la descarga desde ESTE contexto (donde el blob URL es válido)
-      chrome.downloads.download(
-        { url: objectUrl, filename, saveAs: false },
-        (dlId) => {
-          if (chrome.runtime.lastError) {
-            URL.revokeObjectURL(objectUrl);
-            pendingDownloads.delete(downloadId);
-            sendResponse({ error: chrome.runtime.lastError.message });
-            return;
-          }
-
-          // Esperar a que la descarga termine
-          const listener = (delta) => {
-            if (delta.id !== dlId) return;
-
-            if (delta.state?.current === 'complete') {
-              chrome.downloads.onChanged.removeListener(listener);
-              URL.revokeObjectURL(objectUrl);
-              pendingDownloads.delete(downloadId);
-              sendResponse({ ok: true, size: fileSize });
-            } else if (delta.state?.current === 'interrupted') {
-              chrome.downloads.onChanged.removeListener(listener);
-              URL.revokeObjectURL(objectUrl);
-              pendingDownloads.delete(downloadId);
-              sendResponse({ error: 'Descarga interrumpida' });
-            }
-          };
-          chrome.downloads.onChanged.addListener(listener);
-        }
-      );
-
-      return true; // Mantener canal abierto para respuesta async
+        sendResponse({ ok: true, objectUrl, fileSize });
+      } catch (err) {
+        sendResponse({ error: `Error creando Blob: ${err.message}` });
+      }
+      return true;
     }
 
     case 'offscreen:cleanup': {
-      // Limpieza manual por si algo falla
+      // Revocar objectURL y limpiar entrada
       const { downloadId } = message;
+      const entry = pendingDownloads.get(downloadId);
+      if (entry?.objectUrl) {
+        URL.revokeObjectURL(entry.objectUrl);
+      }
       pendingDownloads.delete(downloadId);
       sendResponse({ ok: true });
       return true;
