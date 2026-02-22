@@ -1,15 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Platzi Video Downloader",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Descarga videos de tus cursos de Platzi para verlos offline",
   "permissions": [
     "activeTab",
     "downloads",
     "storage",
-    "webRequest",
-    "cookies",
-    "scripting"
+    "scripting",
+    "offscreen"
   ],
   "host_permissions": [
     "*://platzi.com/*",

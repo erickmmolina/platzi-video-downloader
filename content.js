@@ -15,10 +15,37 @@
   }
 
   function extractVideoM3u8Url() {
-    const html = document.documentElement.innerHTML;
     const pattern = /https:\/\/api\.platzi\.com\/mdstrm\/v1\/video\/([a-f0-9]+)\.m3u8/;
-    const match = html.match(pattern);
-    return match ? { url: match[0], videoId: match[1] } : null;
+
+    // Estrategia 1: Buscar en <script> tags (más eficiente que innerHTML)
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+      if (script.textContent) {
+        const match = script.textContent.match(pattern);
+        if (match) return { url: match[0], videoId: match[1] };
+      }
+    }
+
+    // Estrategia 2: Buscar en elementos de video
+    const videoEls = document.querySelectorAll(
+      'video source[src*="mdstrm"], video[src*="mdstrm"], [data-src*="mdstrm"]'
+    );
+    for (const el of videoEls) {
+      const src = el.getAttribute('src') || el.getAttribute('data-src');
+      if (src) {
+        const match = src.match(pattern);
+        if (match) return { url: match[0], videoId: match[1] };
+      }
+    }
+
+    // Estrategia 3: Fallback a innerHTML (lento pero exhaustivo)
+    try {
+      const html = document.documentElement.innerHTML;
+      const match = html.match(pattern);
+      return match ? { url: match[0], videoId: match[1] } : null;
+    } catch {
+      return null;
+    }
   }
 
   function extractCourseTitle() {
@@ -61,12 +88,15 @@
 
     function processLink(a) {
       const href = a.getAttribute('href');
+      // Guard: href puede ser null o vacío
+      if (!href || !href.includes(`/cursos/${courseSlug}/`)) return;
+
       const slug = href.replace(`/cursos/${courseSlug}/`, '').replace(/\/$/, '');
 
       // Ignorar links que no son clases
       if (!slug || slug.includes('?') || slug.includes('#')) return;
 
-      const text = a.textContent.trim();
+      const text = (a.textContent || '').trim();
 
       // Ignorar navegación
       if (text === 'Siguiente clase' || text === 'Clase anterior') return;
@@ -93,7 +123,7 @@
       classes.push({
         number,
         slug,
-        title,
+        title: title || slug,
         duration,
         href: `/cursos/${courseSlug}/${slug}/`,
         fullUrl: `https://platzi.com/cursos/${courseSlug}/${slug}/`,
@@ -123,7 +153,7 @@
   function extractResume() {
     // Extraer el texto del resumen de la clase
     const resumeHeader = Array.from(document.querySelectorAll('h2, h3, strong')).find(
-      (el) => el.textContent.trim() === 'Resumen'
+      (el) => (el.textContent || '').trim() === 'Resumen'
     );
 
     if (!resumeHeader) return null;
@@ -132,7 +162,7 @@
     let content = '';
     let el = resumeHeader.closest('div') || resumeHeader.parentElement;
     if (el) {
-      content = el.innerText;
+      content = el.textContent || '';
     }
     return content || null;
   }

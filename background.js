@@ -25,7 +25,7 @@ async function fetchInPageContext(tabId, url) {
       }
     },
     args: [url],
-    world: 'MAIN', // Ejecutar en el contexto de la página web, no del content script
+    world: 'MAIN',
   });
 
   const result = results?.[0]?.result;
@@ -36,8 +36,80 @@ async function fetchInPageContext(tabId, url) {
 }
 
 // =====================================================
+// Fetch con reintentos y timeout
+// =====================================================
+
+async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+  const { signal: userSignal, timeout = 30000, ...fetchOpts } = options;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Verificar cancelación del usuario antes de intentar
+      if (userSignal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
+      const timeoutController = new AbortController();
+      const timeoutId = setTimeout(() => timeoutController.abort(), timeout);
+
+      // Combinar señales: usuario + timeout
+      let signal;
+      if (userSignal) {
+        signal = AbortSignal.any([userSignal, timeoutController.signal]);
+      } else {
+        signal = timeoutController.signal;
+      }
+
+      const resp = await fetch(url, { ...fetchOpts, signal });
+      clearTimeout(timeoutId);
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return resp;
+    } catch (error) {
+      // Si el usuario canceló, no reintentar
+      if (error.name === 'AbortError' && userSignal?.aborted) {
+        throw error;
+      }
+      if (attempt === maxRetries) {
+        throw new Error(`Fallo tras ${maxRetries + 1} intentos: ${error.message}`);
+      }
+      // Backoff exponencial: 1s, 2s, 4s
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+// =====================================================
+// Offscreen Document para Blobs
+// =====================================================
+
+let offscreenDocumentCreated = false;
+
+async function ensureOffscreenDocument() {
+  if (offscreenDocumentCreated) return;
+
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+  });
+
+  if (existingContexts.length > 0) {
+    offscreenDocumentCreated = true;
+    return;
+  }
+
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['BLOBS'],
+    justification: 'Crear Blob URLs para descargar videos sin límites de tamaño de data URL',
+  });
+  offscreenDocumentCreated = true;
+}
+
+// =====================================================
 // Estado global de descargas
 // =====================================================
+
 const downloadState = {
   queue: [],
   current: null,
@@ -48,15 +120,50 @@ const downloadState = {
   quality: 'best',
   completedCount: 0,
   totalCount: 0,
-  tabId: null, // Tab de Platzi para executeScript
+  tabId: null,
+  failedClasses: [],
 };
 
 let currentPageData = null;
 
 // =====================================================
+// Persistencia de estado via chrome.storage.session
+// =====================================================
+
+async function persistState() {
+  try {
+    await chrome.storage.session.set({
+      downloadState: {
+        isDownloading: downloadState.isDownloading,
+        current: downloadState.current
+          ? { slug: downloadState.current.slug, title: downloadState.current.title, number: downloadState.current.number }
+          : null,
+        queue: downloadState.queue.map((c) => ({
+          slug: c.slug,
+          title: c.title,
+          number: c.number,
+          fullUrl: c.fullUrl,
+        })),
+        completedCount: downloadState.completedCount,
+        totalCount: downloadState.totalCount,
+        courseSlug: downloadState.courseSlug,
+        courseTitle: downloadState.courseTitle,
+        failedClasses: downloadState.failedClasses,
+      },
+    });
+  } catch {
+    // Ignorar errores de persistencia (no crítico)
+  }
+}
+
+// =====================================================
 // Message handler
 // =====================================================
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Ignorar mensajes del offscreen document
+  if (message.action?.startsWith('offscreen:')) return false;
+
   switch (message.action) {
     case 'pageLoaded':
       currentPageData = message.data;
@@ -96,10 +203,18 @@ function getDownloadStatus() {
     queue: downloadState.queue.map((c) => ({ slug: c.slug, title: c.title, number: c.number })),
     completedCount: downloadState.completedCount,
     totalCount: downloadState.totalCount,
+    courseTitle: downloadState.courseTitle,
+    failedClasses: downloadState.failedClasses,
   };
 }
 
 async function handleStartDownload(message) {
+  // Guard: prevenir doble descarga
+  if (downloadState.isDownloading) {
+    console.warn('Descarga ya en curso, ignorando solicitud duplicada');
+    return;
+  }
+
   const { classes, courseSlug, courseTitle, quality, tabId } = message;
 
   downloadState.queue = [...classes];
@@ -110,12 +225,14 @@ async function handleStartDownload(message) {
   downloadState.completedCount = 0;
   downloadState.totalCount = classes.length;
   downloadState.tabId = tabId;
+  downloadState.failedClasses = [];
 
   broadcastStatus('downloadStarted', {
     total: classes.length,
     courseTitle,
   });
 
+  await persistState();
   processQueue();
 }
 
@@ -129,6 +246,7 @@ function handleCancelDownload() {
   downloadState.abortController = null;
 
   broadcastStatus('downloadCancelled');
+  persistState();
 }
 
 async function processQueue() {
@@ -156,16 +274,26 @@ async function processQueue() {
     } catch (error) {
       if (error.name === 'AbortError') {
         broadcastStatus('downloadCancelled');
+        await persistState();
         return;
       }
 
       console.error(`Error descargando clase ${classItem.title}:`, error);
+
+      // Registrar clase fallida para reintentos
+      downloadState.failedClasses.push({
+        ...classItem,
+        error: error.message,
+      });
+
       broadcastStatus('classError', {
         classTitle: classItem.title,
         classNumber: classItem.number,
         error: error.message,
       });
     }
+
+    await persistState();
   }
 
   downloadState.isDownloading = false;
@@ -175,7 +303,11 @@ async function processQueue() {
   broadcastStatus('downloadComplete', {
     completedCount: downloadState.completedCount,
     totalCount: downloadState.totalCount,
+    courseTitle: downloadState.courseTitle,
+    failedClasses: downloadState.failedClasses,
   });
+
+  await persistState();
 }
 
 async function downloadClass(classItem) {
@@ -208,15 +340,17 @@ async function downloadClass(classItem) {
 
   // 4. Desde aquí, las URLs de mediastream ya tienen auth en los parámetros de URL.
   //    El service worker puede hacer fetch directo sin cookies.
-  const mediaResp = await fetch(selected.url, {
-    signal: downloadState.abortController.signal,
-  });
-  if (!mediaResp.ok) {
+  const signal = downloadState.abortController.signal;
+  let mediaContent;
+
+  try {
+    const mediaResp = await fetchWithRetry(selected.url, { signal, timeout: 30000 });
+    mediaContent = await mediaResp.text();
+  } catch {
     // Si falla, intentar via contexto de página
-    const mediaContent = await fetchInPageContext(tabId, selected.url);
-    return await downloadSegments(mediaContent, selected.url, classItem);
+    mediaContent = await fetchInPageContext(tabId, selected.url);
   }
-  const mediaContent = await mediaResp.text();
+
   await downloadSegments(mediaContent, selected.url, classItem);
 }
 
@@ -230,7 +364,7 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
   // Descargar clave de encriptación si es necesario
   let cryptoKey = null;
   if (segments[0].encryption) {
-    const keyResp = await fetch(segments[0].encryption.keyUrl, { signal });
+    const keyResp = await fetchWithRetry(segments[0].encryption.keyUrl, { signal, timeout: 15000 });
     if (!keyResp.ok) throw new Error(`Error descargando clave: ${keyResp.status}`);
     const keyData = await keyResp.arrayBuffer();
     cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'AES-CBC' }, false, [
@@ -238,26 +372,45 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
     ]);
   }
 
-  // Descargar y desencriptar segmentos
-  const downloadedSegments = [];
+  // Inicializar offscreen document para acumular segmentos como Blob
+  await ensureOffscreenDocument();
+  const downloadId = `${classItem.slug}-${Date.now()}`;
+  await chrome.runtime.sendMessage({
+    action: 'offscreen:initDownload',
+    downloadId,
+    mimeType: 'video/mp2t',
+  });
+
+  // Descargar segmentos uno por uno, enviando cada uno al offscreen inmediatamente
   let totalBytes = 0;
+  const startTime = Date.now();
 
   for (let i = 0; i < segments.length; i++) {
     if (signal?.aborted) throw new DOMException('Descarga cancelada', 'AbortError');
 
     const segment = segments[i];
-    const segResp = await fetch(segment.url, { signal });
-    if (!segResp.ok)
-      throw new Error(`Error descargando segmento ${i + 1}/${segments.length}: ${segResp.status}`);
-
+    const segResp = await fetchWithRetry(segment.url, { signal, timeout: 60000 });
     let data = await segResp.arrayBuffer();
 
     if (segment.encryption && cryptoKey) {
       data = await HLSDownloader.decryptSegment(data, cryptoKey, segment.encryption.iv);
     }
 
-    downloadedSegments.push(data);
     totalBytes += data.byteLength;
+
+    // Enviar segmento al offscreen document (el SW libera `data` después)
+    await chrome.runtime.sendMessage({
+      action: 'offscreen:addSegment',
+      downloadId,
+      segmentData: data,
+    });
+
+    // Calcular velocidad y ETA
+    const elapsedSec = (Date.now() - startTime) / 1000;
+    const speedBps = elapsedSec > 0 ? totalBytes / elapsedSec : 0;
+    const remainingSegments = segments.length - (i + 1);
+    const avgSegmentBytes = totalBytes / (i + 1);
+    const etaSeconds = speedBps > 0 ? Math.round((remainingSegments * avgSegmentBytes) / speedBps) : 0;
 
     broadcastStatus('downloadProgress', {
       classTitle: classItem.title,
@@ -266,56 +419,56 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
       totalSegments: segments.length,
       bytesDownloaded: totalBytes,
       percent: Math.round(((i + 1) / segments.length) * 100),
+      speedBps,
+      etaSeconds,
     });
   }
 
-  // Concatenar todos los segmentos
-  const totalLength = downloadedSegments.reduce((sum, seg) => sum + seg.byteLength, 0);
-  const combined = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const seg of downloadedSegments) {
-    combined.set(new Uint8Array(seg), offset);
-    offset += seg.byteLength;
+  // Finalizar: crear Blob + objectURL en el offscreen
+  const finalizeResult = await chrome.runtime.sendMessage({
+    action: 'offscreen:finalize',
+    downloadId,
+  });
+
+  if (!finalizeResult?.ok) {
+    throw new Error(finalizeResult?.error || 'Error creando archivo de video');
   }
 
-  // Guardar archivo como .ts (Transport Stream)
+  // Guardar archivo
   const safeTitle = sanitizeFilename(classItem.title);
   const number = String(classItem.number).padStart(2, '0');
   const courseFolder = sanitizeFilename(downloadState.courseTitle || downloadState.courseSlug);
   const filename = `Platzi/${courseFolder}/${number}-${safeTitle}.ts`;
 
-  const dataUrl = uint8ArrayToDataUrl(combined, 'video/mp2t');
-
   await new Promise((resolve, reject) => {
-    chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-
-      const listener = (delta) => {
-        if (delta.id !== downloadId) return;
-        if (delta.state?.current === 'complete') {
-          chrome.downloads.onChanged.removeListener(listener);
-          resolve();
-        } else if (delta.state?.current === 'interrupted') {
-          chrome.downloads.onChanged.removeListener(listener);
-          reject(new Error('Descarga interrumpida'));
+    chrome.downloads.download(
+      { url: finalizeResult.url, filename, saveAs: false },
+      (dlId) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
         }
-      };
-      chrome.downloads.onChanged.addListener(listener);
-    });
-  });
-}
 
-function uint8ArrayToDataUrl(uint8Array, mimeType) {
-  let binary = '';
-  const chunkSize = 0x8000; // 32KB chunks para evitar stack overflow
-  for (let i = 0; i < uint8Array.length; i += chunkSize) {
-    const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
-    binary += String.fromCharCode.apply(null, chunk);
-  }
-  return `data:${mimeType};base64,${btoa(binary)}`;
+        const listener = (delta) => {
+          if (delta.id !== dlId) return;
+          if (delta.state?.current === 'complete') {
+            chrome.downloads.onChanged.removeListener(listener);
+            resolve();
+          } else if (delta.state?.current === 'interrupted') {
+            chrome.downloads.onChanged.removeListener(listener);
+            reject(new Error('Descarga interrumpida'));
+          }
+        };
+        chrome.downloads.onChanged.addListener(listener);
+      }
+    );
+  });
+
+  // Limpiar objectURL en el offscreen
+  await chrome.runtime.sendMessage({
+    action: 'offscreen:cleanup',
+    downloadId,
+  });
 }
 
 function sanitizeFilename(name) {

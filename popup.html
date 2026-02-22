@@ -11,7 +11,7 @@
     <!-- Header -->
     <header class="header">
       <div class="header-title">
-        <svg class="logo" viewBox="0 0 24 24" width="24" height="24">
+        <svg class="logo" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
           <path fill="#98CA3F" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
         </svg>
         <h1>Platzi Downloader</h1>
@@ -37,7 +37,7 @@
       <div class="controls">
         <div class="quality-selector">
           <label for="quality">Calidad:</label>
-          <select id="quality">
+          <select id="quality" aria-label="Calidad del video">
             <option value="best">Mejor disponible</option>
             <option value="1080">1080p</option>
             <option value="720">720p</option>
@@ -45,13 +45,18 @@
           </select>
         </div>
         <div class="actions">
-          <button id="btn-select-all" class="btn btn-secondary">Seleccionar todo</button>
-          <button id="btn-download" class="btn btn-primary">Descargar</button>
+          <button id="btn-select-all" class="btn btn-secondary" aria-label="Seleccionar o deseleccionar todas las clases">Seleccionar todo</button>
+          <button id="btn-download" class="btn btn-primary" aria-label="Iniciar descarga">Descargar</button>
         </div>
       </div>
 
+      <!-- Búsqueda de clases -->
+      <div class="search-container">
+        <input type="search" id="class-search" placeholder="Buscar clase..." aria-label="Buscar clase por nombre">
+      </div>
+
       <!-- Lista de clases -->
-      <div id="class-list" class="class-list"></div>
+      <div id="class-list" class="class-list" role="list" aria-label="Lista de clases del curso"></div>
     </div>
 
     <!-- Estado: Descargando -->
@@ -62,7 +67,7 @@
 
         <!-- Progreso de la clase actual -->
         <div class="progress-container">
-          <div class="progress-bar">
+          <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Progreso de la clase actual">
             <div id="dl-progress-bar" class="progress-fill"></div>
           </div>
           <span id="dl-progress-text" class="progress-text">0%</span>
@@ -71,19 +76,21 @@
         <!-- Progreso general -->
         <div class="progress-container">
           <label class="progress-label">Progreso total</label>
-          <div class="progress-bar">
+          <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Progreso total">
             <div id="dl-total-bar" class="progress-fill total"></div>
           </div>
           <span id="dl-total-text" class="progress-text">0 / 0</span>
         </div>
 
         <div id="dl-size" class="dl-size"></div>
+        <div id="dl-speed" class="dl-speed"></div>
 
-        <button id="btn-cancel" class="btn btn-danger">Cancelar</button>
+        <button id="btn-cancel" class="btn btn-danger" aria-label="Cancelar descarga">Cancelar</button>
+        <button id="btn-retry-failed" class="btn btn-secondary hidden" aria-label="Reintentar clases fallidas">Reintentar fallidas</button>
       </div>
 
       <!-- Log de descargas -->
-      <div id="download-log" class="download-log"></div>
+      <div id="download-log" class="download-log" role="log" aria-label="Registro de descargas"></div>
     </div>
   </div>
 

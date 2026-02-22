@@ -53,6 +53,10 @@ body {
   display: none;
 }
 
+.hidden {
+  display: none !important;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;
@@ -92,7 +96,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .quality-selector {
@@ -119,6 +123,30 @@ body {
 .actions {
   display: flex;
   gap: 8px;
+}
+
+/* Search */
+.search-container {
+  margin-bottom: 8px;
+}
+
+#class-search {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  font-size: 12px;
+}
+
+#class-search::placeholder {
+  color: #666;
+}
+
+#class-search:focus {
+  outline: none;
+  border-color: #98CA3F;
 }
 
 /* Buttons */
@@ -159,9 +187,18 @@ body {
   margin-top: 8px;
 }
 
+/* Focus visible - Accesibilidad */
+.btn:focus-visible,
+.class-item input:focus-visible,
+select:focus-visible,
+#class-search:focus-visible {
+  outline: 2px solid #98CA3F;
+  outline-offset: 2px;
+}
+
 /* Class list */
 .class-list {
-  max-height: 320px;
+  max-height: 280px;
   overflow-y: auto;
   border: 1px solid #2a2a2a;
   border-radius: 6px;
@@ -288,6 +325,13 @@ body {
   font-size: 11px;
   color: #666;
   margin-top: 4px;
+}
+
+.dl-speed {
+  font-size: 11px;
+  color: #98CA3F;
+  margin-top: 2px;
+  font-weight: 500;
 }
 
 /* Download log */
