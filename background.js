@@ -1,5 +1,6 @@
 // Service Worker - Orquesta las descargas de video
 importScripts('hls-downloader.js');
+importScripts('vendor/mux.min.js');
 
 // =====================================================
 // Fetch autenticado via executeScript (en contexto de página)
@@ -238,8 +239,19 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
     ]);
   }
 
-  // Descargar y desencriptar segmentos
-  const downloadedSegments = [];
+  // Inicializar transmuxer TS → MP4 (mux.js)
+  const transmuxer = new muxjs.mp4.Transmuxer();
+  const mp4Chunks = [];
+  let initSegment = null;
+
+  transmuxer.on('data', (segment) => {
+    if (!initSegment) {
+      initSegment = new Uint8Array(segment.initSegment);
+    }
+    mp4Chunks.push(new Uint8Array(segment.data));
+  });
+
+  // Descargar, desencriptar y transmuxear segmentos
   let totalBytes = 0;
 
   for (let i = 0; i < segments.length; i++) {
@@ -256,7 +268,8 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
       data = await HLSDownloader.decryptSegment(data, cryptoKey, segment.encryption.iv);
     }
 
-    downloadedSegments.push(data);
+    // Push al transmuxer (convierte TS → MP4 incrementalmente)
+    transmuxer.push(new Uint8Array(data));
     totalBytes += data.byteLength;
 
     broadcastStatus('downloadProgress', {
@@ -269,23 +282,37 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
     });
   }
 
-  // Concatenar todos los segmentos
-  const totalLength = downloadedSegments.reduce((sum, seg) => sum + seg.byteLength, 0);
-  const combined = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const seg of downloadedSegments) {
-    combined.set(new Uint8Array(seg), offset);
-    offset += seg.byteLength;
+  // Flush para obtener datos restantes del transmuxer
+  transmuxer.flush();
+
+  if (!initSegment || mp4Chunks.length === 0) {
+    throw new Error('Error al convertir video a MP4');
   }
 
-  // Guardar archivo
+  // Combinar init segment (ftyp + moov) + chunks MP4 (moof + mdat)
+  let totalLength = initSegment.byteLength;
+  for (const chunk of mp4Chunks) {
+    totalLength += chunk.byteLength;
+  }
+
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+
+  combined.set(initSegment, offset);
+  offset += initSegment.byteLength;
+
+  for (const chunk of mp4Chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  // Guardar archivo como .mp4
   const safeTitle = sanitizeFilename(classItem.title);
   const number = String(classItem.number).padStart(2, '0');
   const courseFolder = sanitizeFilename(downloadState.courseTitle || downloadState.courseSlug);
-  const filename = `Platzi/${courseFolder}/${number}-${safeTitle}.ts`;
+  const filename = `Platzi/${courseFolder}/${number}-${safeTitle}.mp4`;
 
-  // MV3 service workers no tienen URL.createObjectURL, usar data URL
-  const dataUrl = uint8ArrayToDataUrl(combined, 'video/mp2t');
+  const dataUrl = uint8ArrayToDataUrl(combined, 'video/mp4');
 
   await new Promise((resolve, reject) => {
     chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, (downloadId) => {
