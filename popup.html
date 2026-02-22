@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Platzi Video Downloader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-title">
+        <svg class="logo" viewBox="0 0 24 24" width="24" height="24">
+          <path fill="#98CA3F" d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <h1>Platzi Downloader</h1>
+      </div>
+    </header>
+
+    <!-- Estado: No en Platzi -->
+    <div id="state-not-platzi" class="state">
+      <div class="empty-state">
+        <p>Navega a un curso de Platzi para empezar a descargar.</p>
+        <span class="hint">Ejemplo: platzi.com/cursos/tu-curso/</span>
+      </div>
+    </div>
+
+    <!-- Estado: Curso detectado -->
+    <div id="state-course" class="state hidden">
+      <div class="course-info">
+        <h2 id="course-title" class="course-title"></h2>
+        <span id="class-count" class="class-count"></span>
+      </div>
+
+      <!-- Controles -->
+      <div class="controls">
+        <div class="quality-selector">
+          <label for="quality">Calidad:</label>
+          <select id="quality">
+            <option value="best">Mejor disponible</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="360">360p</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button id="btn-select-all" class="btn btn-secondary">Seleccionar todo</button>
+          <button id="btn-download" class="btn btn-primary">Descargar</button>
+        </div>
+      </div>
+
+      <!-- Lista de clases -->
+      <div id="class-list" class="class-list"></div>
+    </div>
+
+    <!-- Estado: Descargando -->
+    <div id="state-downloading" class="state hidden">
+      <div class="download-info">
+        <h3 id="dl-title">Descargando...</h3>
+        <p id="dl-class-name" class="dl-class-name"></p>
+
+        <!-- Progreso de la clase actual -->
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div id="dl-progress-bar" class="progress-fill"></div>
+          </div>
+          <span id="dl-progress-text" class="progress-text">0%</span>
+        </div>
+
+        <!-- Progreso general -->
+        <div class="progress-container">
+          <label class="progress-label">Progreso total</label>
+          <div class="progress-bar">
+            <div id="dl-total-bar" class="progress-fill total"></div>
+          </div>
+          <span id="dl-total-text" class="progress-text">0 / 0</span>
+        </div>
+
+        <div id="dl-size" class="dl-size"></div>
+
+        <button id="btn-cancel" class="btn btn-danger">Cancelar</button>
+      </div>
+
+      <!-- Log de descargas -->
+      <div id="download-log" class="download-log"></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

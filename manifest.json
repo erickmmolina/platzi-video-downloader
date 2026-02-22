@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Platzi Video Downloader",
+  "version": "1.0.0",
+  "description": "Descarga videos de tus cursos de Platzi para verlos offline",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "webRequest",
+    "cookies",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://platzi.com/*",
+    "*://api.platzi.com/*",
+    "*://mediastream.platzi.com/*",
+    "*://*.cdn.mdstrm.com/*",
+    "*://*.mdstrm.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://platzi.com/cursos/*", "*://platzi.com/clases/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
