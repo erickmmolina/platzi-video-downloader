@@ -398,12 +398,18 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
 
     totalBytes += data.byteLength;
 
-    // Enviar segmento al offscreen document (el SW libera `data` después)
-    await chrome.runtime.sendMessage({
+    // Enviar segmento al offscreen document como Array<number>
+    // (Array.from garantiza serialización correcta via structured clone,
+    //  ArrayBuffer directo puede fallar en algunos contextos de Chrome)
+    const addResult = await chrome.runtime.sendMessage({
       action: 'offscreen:addSegment',
       downloadId,
-      segmentData: data,
+      segmentData: Array.from(new Uint8Array(data)),
     });
+
+    if (!addResult?.ok) {
+      throw new Error(addResult?.error || `Error enviando segmento ${i + 1} al offscreen`);
+    }
 
     // Calcular velocidad y ETA
     const elapsedSec = (Date.now() - startTime) / 1000;
@@ -424,51 +430,22 @@ async function downloadSegments(mediaContent, mediaUrl, classItem) {
     });
   }
 
-  // Finalizar: crear Blob + objectURL en el offscreen
-  const finalizeResult = await chrome.runtime.sendMessage({
-    action: 'offscreen:finalize',
-    downloadId,
-  });
-
-  if (!finalizeResult?.ok) {
-    throw new Error(finalizeResult?.error || 'Error creando archivo de video');
-  }
-
-  // Guardar archivo
+  // Crear Blob, objectURL y descargar TODO desde el offscreen document
+  // (los blob URLs solo son válidos en el contexto que los creó)
   const safeTitle = sanitizeFilename(classItem.title);
   const number = String(classItem.number).padStart(2, '0');
   const courseFolder = sanitizeFilename(downloadState.courseTitle || downloadState.courseSlug);
   const filename = `Platzi/${courseFolder}/${number}-${safeTitle}.ts`;
 
-  await new Promise((resolve, reject) => {
-    chrome.downloads.download(
-      { url: finalizeResult.url, filename, saveAs: false },
-      (dlId) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        const listener = (delta) => {
-          if (delta.id !== dlId) return;
-          if (delta.state?.current === 'complete') {
-            chrome.downloads.onChanged.removeListener(listener);
-            resolve();
-          } else if (delta.state?.current === 'interrupted') {
-            chrome.downloads.onChanged.removeListener(listener);
-            reject(new Error('Descarga interrumpida'));
-          }
-        };
-        chrome.downloads.onChanged.addListener(listener);
-      }
-    );
-  });
-
-  // Limpiar objectURL en el offscreen
-  await chrome.runtime.sendMessage({
-    action: 'offscreen:cleanup',
+  const downloadResult = await chrome.runtime.sendMessage({
+    action: 'offscreen:download',
     downloadId,
+    filename,
   });
+
+  if (!downloadResult?.ok) {
+    throw new Error(downloadResult?.error || 'Error descargando archivo de video');
+  }
 }
 
 function sanitizeFilename(name) {
