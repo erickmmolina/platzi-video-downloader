@@ -202,6 +202,38 @@
       sendResponse({ video, resume });
       return true;
     }
+
+    // Proxy de requests HTTP para el background service worker.
+    // El service worker no puede hacer fetch con cookies de platzi.com,
+    // y chrome.scripting.executeScript tiene problemas con el wrapper
+    // de fetch/XHR de Platzi + sus service workers.
+    // El content script (isolated world) usa fetch/XHR nativos y las
+    // cookies del origen están disponibles automáticamente.
+    if (message.action === 'fetchUrl') {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', message.url, true);
+      xhr.withCredentials = true;
+      xhr.timeout = 30000;
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          sendResponse({ ok: true, text: xhr.responseText, status: xhr.status });
+        } else {
+          sendResponse({ error: `HTTP ${xhr.status}`, status: xhr.status });
+        }
+      };
+
+      xhr.onerror = () => {
+        sendResponse({ error: `Error de red (XHR status: ${xhr.status})` });
+      };
+
+      xhr.ontimeout = () => {
+        sendResponse({ error: 'Timeout (30s)' });
+      };
+
+      xhr.send();
+      return true; // Mantener canal abierto para respuesta async
+    }
   });
 
   // Notificar al background que la página cargó

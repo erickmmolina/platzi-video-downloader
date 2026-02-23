@@ -2,52 +2,37 @@
 importScripts('hls-downloader.js');
 
 // =====================================================
-// Fetch autenticado via executeScript (en contexto de página)
+// Fetch autenticado via content script (en contexto de página)
 // =====================================================
 
 /**
- * Ejecuta un request HTTP en el contexto de la página de Platzi (tab),
- * donde las cookies de sesión están disponibles automáticamente.
+ * Hace un request HTTP delegando al content script inyectado en la pestaña.
+ * Las cookies de sesión de platzi.com están disponibles automáticamente.
  *
- * Usa XMLHttpRequest en vez de fetch() porque Platzi sobreescribe el
- * fetch nativo con un wrapper personalizado que puede fallar cuando
- * se invoca desde chrome.scripting.executeScript.
- * XHR no pasa por ese wrapper y funciona correctamente.
+ * Usa chrome.tabs.sendMessage en vez de chrome.scripting.executeScript
+ * porque Platzi sobreescribe fetch() y sus Service Workers interfieren
+ * con requests hechos via executeScript (tanto fetch como XHR fallan).
+ * El content script (isolated world) usa XHR nativo sin estas limitaciones.
  */
 async function fetchInPageContext(tabId, url) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (requestUrl) => {
-      return new Promise((resolve) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', requestUrl, true);
-        xhr.withCredentials = true;
-        xhr.timeout = 30000;
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve({ ok: true, text: xhr.responseText, status: xhr.status });
-          } else {
-            resolve({ error: `HTTP ${xhr.status}`, status: xhr.status });
-          }
-        };
-
-        xhr.onerror = () => {
-          resolve({ error: `Error de red (XHR status: ${xhr.status})` });
-        };
-
-        xhr.ontimeout = () => {
-          resolve({ error: 'Timeout (30s)' });
-        };
-
-        xhr.send();
+  let result;
+  try {
+    result = await chrome.tabs.sendMessage(tabId, { action: 'fetchUrl', url });
+  } catch (err) {
+    // Content script puede no estar inyectado aún — inyectar manualmente y reintentar
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content.js'],
       });
-    },
-    args: [url],
-    world: 'MAIN',
-  });
+      // Esperar un momento para que el script se inicialice
+      await new Promise((r) => setTimeout(r, 300));
+      result = await chrome.tabs.sendMessage(tabId, { action: 'fetchUrl', url });
+    } catch (retryErr) {
+      throw new Error(`No se pudo comunicar con content script: ${retryErr.message}`);
+    }
+  }
 
-  const result = results?.[0]?.result;
   if (!result || result.error) {
     throw new Error(result?.error || 'No se pudo ejecutar request en la página');
   }
