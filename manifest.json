@@ -5,6 +5,7 @@
   "description": "Descarga videos de tus cursos de Platzi para verlos offline",
   "permissions": [
     "activeTab",
+    "cookies",
     "downloads",
     "storage",
     "scripting",

@@ -2,41 +2,41 @@
 importScripts('hls-downloader.js');
 
 // =====================================================
-// Fetch autenticado via content script (en contexto de página)
+// Fetch autenticado directo desde el service worker
 // =====================================================
 
 /**
- * Hace un request HTTP delegando al content script inyectado en la pestaña.
- * Las cookies de sesión de platzi.com están disponibles automáticamente.
+ * Hace un request HTTP directamente desde el service worker,
+ * incluyendo las cookies de platzi.com manualmente.
  *
- * Usa chrome.tabs.sendMessage en vez de chrome.scripting.executeScript
- * porque Platzi sobreescribe fetch() y sus Service Workers interfieren
- * con requests hechos via executeScript (tanto fetch como XHR fallan).
- * El content script (isolated world) usa XHR nativo sin estas limitaciones.
+ * Este enfoque bypassa completamente:
+ * - El wrapper personalizado de fetch() de Platzi
+ * - Los Service Workers de Platzi (que bloquean requests desde contextos de extensión)
+ * - Los problemas de chrome.scripting.executeScript con Promises
+ *
+ * Requiere: permiso "cookies" + host_permissions para los dominios objetivo.
+ * host_permissions también bypassa CORS y permite establecer el header Cookie.
  */
 async function fetchInPageContext(tabId, url) {
-  let result;
-  try {
-    result = await chrome.tabs.sendMessage(tabId, { action: 'fetchUrl', url });
-  } catch (err) {
-    // Content script puede no estar inyectado aún — inyectar manualmente y reintentar
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content.js'],
-      });
-      // Esperar un momento para que el script se inicialice
-      await new Promise((r) => setTimeout(r, 300));
-      result = await chrome.tabs.sendMessage(tabId, { action: 'fetchUrl', url });
-    } catch (retryErr) {
-      throw new Error(`No se pudo comunicar con content script: ${retryErr.message}`);
-    }
+  // Obtener cookies para el dominio del URL
+  const cookies = await chrome.cookies.getAll({ url });
+  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+
+  const resp = await fetch(url, {
+    headers: {
+      Cookie: cookieHeader,
+      // Simular headers de navegador para evitar bloqueos
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
+    },
+    redirect: 'follow',
+  });
+
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status} al fetchear ${url}`);
   }
 
-  if (!result || result.error) {
-    throw new Error(result?.error || 'No se pudo ejecutar request en la página');
-  }
-  return result.text;
+  return await resp.text();
 }
 
 // =====================================================
