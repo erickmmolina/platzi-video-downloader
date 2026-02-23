@@ -6,23 +6,42 @@ importScripts('hls-downloader.js');
 // =====================================================
 
 /**
- * Ejecuta un fetch en el contexto de la página de Platzi (tab),
+ * Ejecuta un request HTTP en el contexto de la página de Platzi (tab),
  * donde las cookies de sesión están disponibles automáticamente.
+ *
+ * Usa XMLHttpRequest en vez de fetch() porque Platzi sobreescribe el
+ * fetch nativo con un wrapper personalizado que puede fallar cuando
+ * se invoca desde chrome.scripting.executeScript.
+ * XHR no pasa por ese wrapper y funciona correctamente.
  */
 async function fetchInPageContext(tabId, url) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: async (fetchUrl) => {
-      try {
-        const resp = await fetch(fetchUrl, { credentials: 'include' });
-        if (!resp.ok) {
-          return { error: `HTTP ${resp.status}`, status: resp.status };
-        }
-        const text = await resp.text();
-        return { ok: true, text, status: resp.status };
-      } catch (e) {
-        return { error: e.message };
-      }
+    func: (requestUrl) => {
+      return new Promise((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', requestUrl, true);
+        xhr.withCredentials = true;
+        xhr.timeout = 30000;
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ ok: true, text: xhr.responseText, status: xhr.status });
+          } else {
+            resolve({ error: `HTTP ${xhr.status}`, status: xhr.status });
+          }
+        };
+
+        xhr.onerror = () => {
+          resolve({ error: `Error de red (XHR status: ${xhr.status})` });
+        };
+
+        xhr.ontimeout = () => {
+          resolve({ error: 'Timeout (30s)' });
+        };
+
+        xhr.send();
+      });
     },
     args: [url],
     world: 'MAIN',
@@ -30,7 +49,7 @@ async function fetchInPageContext(tabId, url) {
 
   const result = results?.[0]?.result;
   if (!result || result.error) {
-    throw new Error(result?.error || 'No se pudo ejecutar fetch en la página');
+    throw new Error(result?.error || 'No se pudo ejecutar request en la página');
   }
   return result.text;
 }
